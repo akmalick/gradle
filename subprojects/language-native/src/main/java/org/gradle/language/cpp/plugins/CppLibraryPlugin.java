@@ -20,9 +20,11 @@ import org.apache.commons.lang.StringUtils;
 import org.gradle.api.Action;
 import org.gradle.api.Incubating;
 import org.gradle.api.Named;
+import org.gradle.api.NamedDomainObjectContainer;
 import org.gradle.api.Plugin;
 import org.gradle.api.Project;
 import org.gradle.api.artifacts.Configuration;
+import org.gradle.api.artifacts.ConfigurationVariant;
 import org.gradle.api.attributes.AttributeContainer;
 import org.gradle.api.attributes.Usage;
 import org.gradle.api.internal.artifacts.dsl.LazyPublishArtifact;
@@ -46,6 +48,7 @@ import org.gradle.language.cpp.internal.MainLibraryVariant;
 import org.gradle.language.cpp.internal.NativeVariantIdentity;
 import org.gradle.language.internal.NativeComponentFactory;
 import org.gradle.language.nativeplatform.internal.toolchains.ToolChainSelector;
+import org.gradle.nativeplatform.HeaderFormat;
 import org.gradle.nativeplatform.Linkage;
 import org.gradle.nativeplatform.OperatingSystemFamily;
 import org.gradle.nativeplatform.platform.internal.DefaultNativePlatform;
@@ -187,8 +190,6 @@ public class CppLibraryPlugin implements Plugin<ProjectInternal> {
                     }
                 }
 
-                final MainLibraryVariant mainVariant = library.getMainPublication();
-
                 final Configuration apiElements = library.getApiElements();
                 // TODO - deal with more than one header dir, e.g. generated public headers
                 Provider<File> publicHeaders = providers.provider(new Callable<File>() {
@@ -201,21 +202,41 @@ public class CppLibraryPlugin implements Plugin<ProjectInternal> {
                         return files.iterator().next();
                     }
                 });
-                apiElements.getOutgoing().artifact(publicHeaders);
+                final TaskProvider<Zip> headersZip = tasks.register("cppHeaders", Zip.class, new Action<Zip>() {
+                    @Override
+                    public void execute(Zip headersZip) {
+                        headersZip.from(library.getPublicHeaderFiles());
+                        // TODO - should track changes to build directory
+                        headersZip.setDestinationDir(new File(project.getBuildDir(), "headers"));
+                        headersZip.setClassifier("cpp-api-headers");
+                        headersZip.setArchiveName("cpp-api-headers.zip");
+                    }
+                });
+
+                apiElements.getOutgoing().variants(new Action<NamedDomainObjectContainer<ConfigurationVariant>>() {
+                    @Override
+                    public void execute(NamedDomainObjectContainer<ConfigurationVariant> variants) {
+                        variants.create("zipped", new Action<ConfigurationVariant>() {
+                            @Override
+                            public void execute(ConfigurationVariant variant) {
+                                variant.getAttributes().attribute(HeaderFormat.ATTRIBUTE, objectFactory.named(HeaderFormat.class, HeaderFormat.ZIP));
+                                variant.artifact(headersZip);
+                            }
+                        });
+                        variants.create("dirs", new Action<ConfigurationVariant>() {
+                            @Override
+                            public void execute(ConfigurationVariant variant) {
+                                variant.getAttributes().attribute(HeaderFormat.ATTRIBUTE, objectFactory.named(HeaderFormat.class, HeaderFormat.DIRECTORY));
+                                variant.artifact(publicHeaders);
+                            }
+                        });
+                    }
+                });
 
                 project.getPluginManager().withPlugin("maven-publish", new Action<AppliedPlugin>() {
                     @Override
                     public void execute(AppliedPlugin appliedPlugin) {
-                        final TaskProvider<Zip> headersZip = tasks.register("cppHeaders", Zip.class, new Action<Zip>() {
-                            @Override
-                            public void execute(Zip headersZip) {
-                                headersZip.from(library.getPublicHeaderFiles());
-                                // TODO - should track changes to build directory
-                                headersZip.setDestinationDir(new File(project.getBuildDir(), "headers"));
-                                headersZip.setClassifier("cpp-api-headers");
-                                headersZip.setArchiveName("cpp-api-headers.zip");
-                            }
-                        });
+                        final MainLibraryVariant mainVariant = library.getMainPublication();
                         mainVariant.addArtifact(new LazyPublishArtifact(headersZip));
                     }
                 });

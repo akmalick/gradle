@@ -16,35 +16,26 @@
 
 package org.gradle.language.cpp.internal;
 
-import org.gradle.api.Buildable;
-import org.gradle.api.artifacts.ArtifactCollection;
 import org.gradle.api.artifacts.Configuration;
 import org.gradle.api.artifacts.ConfigurationContainer;
-import org.gradle.api.artifacts.component.ModuleComponentIdentifier;
-import org.gradle.api.artifacts.result.ResolvedArtifactResult;
 import org.gradle.api.attributes.Usage;
 import org.gradle.api.file.FileCollection;
 import org.gradle.api.internal.file.FileOperations;
 import org.gradle.api.internal.file.TemporaryFileProvider;
-import org.gradle.api.internal.file.collections.FileCollectionAdapter;
-import org.gradle.api.internal.file.collections.MinimalFileSet;
 import org.gradle.api.model.ObjectFactory;
 import org.gradle.api.provider.Property;
 import org.gradle.api.provider.Provider;
-import org.gradle.api.tasks.TaskDependency;
 import org.gradle.language.cpp.CppBinary;
 import org.gradle.language.cpp.CppPlatform;
 import org.gradle.language.cpp.tasks.CppCompile;
 import org.gradle.language.internal.DefaultNativeBinary;
 import org.gradle.language.nativeplatform.internal.Names;
+import org.gradle.nativeplatform.HeaderFormat;
 import org.gradle.nativeplatform.OperatingSystemFamily;
 import org.gradle.nativeplatform.toolchain.internal.NativeToolChainInternal;
 import org.gradle.nativeplatform.toolchain.internal.PlatformToolProvider;
 
 import javax.inject.Inject;
-import java.io.File;
-import java.util.LinkedHashSet;
-import java.util.Set;
 
 public class DefaultCppBinary extends DefaultNativeBinary implements CppBinary {
     private final Provider<String> baseName;
@@ -71,13 +62,14 @@ public class DefaultCppBinary extends DefaultNativeBinary implements CppBinary {
 
         // TODO - reduce duplication with Swift binary
 
-        Configuration includePathConfig = configurations.create(names.withPrefix("cppCompile"));
-        includePathConfig.setCanBeConsumed(false);
-        includePathConfig.getAttributes().attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.class, Usage.C_PLUS_PLUS_API));
-        includePathConfig.getAttributes().attribute(DEBUGGABLE_ATTRIBUTE, identity.isDebuggable());
-        includePathConfig.getAttributes().attribute(OPTIMIZED_ATTRIBUTE, identity.isOptimized());
-        includePathConfig.getAttributes().attribute(OperatingSystemFamily.OPERATING_SYSTEM_ATTRIBUTE, identity.getOperatingSystemFamily());
-        includePathConfig.extendsFrom(getImplementationDependencies());
+        includePathConfiguration = configurations.create(names.withPrefix("cppCompile"));
+        includePathConfiguration.setCanBeConsumed(false);
+        includePathConfiguration.getAttributes().attribute(Usage.USAGE_ATTRIBUTE, objects.named(Usage.class, Usage.C_PLUS_PLUS_API));
+        includePathConfiguration.getAttributes().attribute(DEBUGGABLE_ATTRIBUTE, identity.isDebuggable());
+        includePathConfiguration.getAttributes().attribute(OPTIMIZED_ATTRIBUTE, identity.isOptimized());
+        includePathConfiguration.getAttributes().attribute(OperatingSystemFamily.OPERATING_SYSTEM_ATTRIBUTE, identity.getOperatingSystemFamily());
+        includePathConfiguration.getAttributes().attribute(HeaderFormat.ATTRIBUTE, objects.named(HeaderFormat.class, HeaderFormat.DIRECTORY));
+        includePathConfiguration.extendsFrom(getImplementationDependencies());
 
         Configuration nativeLink = configurations.create(names.withPrefix("nativeLink"));
         nativeLink.setCanBeConsumed(false);
@@ -95,8 +87,8 @@ public class DefaultCppBinary extends DefaultNativeBinary implements CppBinary {
         nativeRuntime.getAttributes().attribute(OperatingSystemFamily.OPERATING_SYSTEM_ATTRIBUTE, identity.getOperatingSystemFamily());
         nativeRuntime.extendsFrom(getImplementationDependencies());
 
-        includePathConfiguration = includePathConfig;
-        includePath = componentHeaderDirs.plus(new FileCollectionAdapter(new IncludePath(includePathConfig)));
+        // TODO: componentHeaderDirs should be added to include path automagically?
+        includePath = componentHeaderDirs.plus(includePathConfiguration);
         linkLibraries = nativeLink;
         runtimeLibraries = nativeRuntime;
     }
@@ -180,52 +172,5 @@ public class DefaultCppBinary extends DefaultNativeBinary implements CppBinary {
 
     public NativeVariantIdentity getIdentity() {
         return identity;
-    }
-
-    private class IncludePath implements MinimalFileSet, Buildable {
-        private final Configuration includePathConfig;
-        private Set<File> result;
-
-        IncludePath(Configuration includePathConfig) {
-            this.includePathConfig = includePathConfig;
-        }
-
-        @Override
-        public String getDisplayName() {
-            return "Include path for " + DefaultCppBinary.this.toString();
-        }
-
-        @Override
-        public Set<File> getFiles() {
-            if (result == null) {
-                // All this is intended to go away as more Gradle-specific metadata is included in the publications and the dependency resolution engine can just figure this stuff out for us
-                // This is intentionally dumb and will improve later
-
-                // Collect the files from anything other than an external component and use these directly in the result
-                // For external components, unzip the headers into a cache, if not already present.
-                ArtifactCollection artifacts = includePathConfig.getIncoming().getArtifacts();
-                Set<File> files = new LinkedHashSet<File>();
-                if (!artifacts.getArtifacts().isEmpty()) {
-                    NativeDependencyCache cache = getNativeDependencyCache();
-                    for (ResolvedArtifactResult artifact : artifacts) {
-                        if (artifact.getId().getComponentIdentifier() instanceof ModuleComponentIdentifier && artifact.getFile().isFile()) {
-                            // Unzip the headers into cache
-                            ModuleComponentIdentifier id = (ModuleComponentIdentifier) artifact.getId().getComponentIdentifier();
-                            File headerDir = cache.getUnpackedHeaders(artifact.getFile(), id.getModule() + "-" + id.getVersion());
-                            files.add(headerDir);
-                        } else {
-                            files.add(artifact.getFile());
-                        }
-                    }
-                }
-                result = files;
-            }
-            return result;
-        }
-
-        @Override
-        public TaskDependency getBuildDependencies() {
-            return includePathConfig.getBuildDependencies();
-        }
     }
 }
